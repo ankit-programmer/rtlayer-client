@@ -1,4 +1,4 @@
-import { EventEmitter, Transform, Writable } from "stream";
+import { EventEmitter, Transform, Writable } from "stream-browserify";
 
 const BASE_URL = `wss://ws.rtlayer.com`;
 class SendMessage extends Transform {
