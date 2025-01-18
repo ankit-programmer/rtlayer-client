@@ -1,37 +1,29 @@
-import { EventEmitter, Transform, Writable } from "stream-browserify";
-
 const BASE_URL = `wss://ws.rtlayer.com`;
-class SendMessage extends Transform {
-    private ws: WebSocket;
-    constructor(ws: WebSocket) {
-        super({ objectMode: true });
-        this.ws = ws;
-    }
-    async _transform(chunk: string, encoding: string, callback: Function) {
-        try {
-            this.ws?.send(chunk);
-            await delay(100);
-            this.push(chunk);
-        } catch (error) {
-            console.error(error);
-        }
-        callback();
-    }
-}
 
-class MessageStream extends Transform {
 
+class MessageQueue {
+    private queue: string[] = [];
     constructor() {
-        super({ objectMode: true });
     }
-
-    _transform(chunk: Object, encoding: string, callback: Function) {
-        this.push(JSON.stringify(chunk));
-        callback();
+    push(message: string) {
+        this.queue.push(message);
+    }
+    pop() {
+        return this.queue.shift();
+    }
+    size() {
+        return this.queue.length;
+    }
+    async * messages() {
+        while (true) {
+            if (this.size() > 0) {
+                yield this.pop();
+            } else {
+                await delay(100);
+            }
+        }
     }
 }
-
-
 
 class WebSocketClient {
     private ws: WebSocket | null = null;
@@ -41,13 +33,12 @@ class WebSocketClient {
     private token?: string
     private isGloballySubscribed = false; // True if listening for "*" events
     private activeChannels: Set<string> = new Set();
-    private messageStream;
+    private queue = new MessageQueue();
 
     constructor(org: string, service: string, token?: string, retryInterval: number = 5000) {
         this.url = `${BASE_URL}/${org}/${service}/?token=${token}`;
         this.retryInterval = retryInterval;
         this.token = token
-        this.messageStream = new MessageStream();
         this.connect();
     }
 
@@ -58,11 +49,13 @@ class WebSocketClient {
                 this.emit('open', null);
                 // Rejoin active channels on reconnect
                 this.activeChannels.forEach(channel => this.subscribe(channel));
-                // Send messages through the stream
-                this.messageStream.unpipe();
-                if (this.ws) this.messageStream.pipe(new SendMessage(this.ws)).on('data', (chunk) => chunk).on('error', (error) => {
-                    console.error(error);
-                });
+                // Send messages from queue
+                for await (const message of this.queue.messages()) {
+                    if (this.ws?.readyState === WebSocket.OPEN && message) {
+                        this.ws.send(message);
+                        await delay(50);
+                    }
+                }
             };
             this.ws.onmessage = (event) => {
                 let data = event.data;
@@ -83,7 +76,6 @@ class WebSocketClient {
 
             };
             this.ws.onclose = () => {
-                this.messageStream.unpipe();
                 this.emit('close', null);
                 setTimeout(() => {
                     // Retry connection
@@ -102,12 +94,12 @@ class WebSocketClient {
     subscribe(channel: string) {
         this.activeChannels.add(channel);
         const message = { action: 'join', channel: channel };
-        this.messageStream.write(message);
+        this.queue.push(JSON.stringify(message));
     }
     unsubscribe(channel: string) {
         this.activeChannels.delete(channel);
         const message = { action: 'leave', channel: channel };
-        this.messageStream.write(message);
+        this.queue.push(JSON.stringify(message));
     }
 
     close() {
