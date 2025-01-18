@@ -53,7 +53,7 @@ class WebSocketClient {
                 for await (const message of this.queue.messages()) {
                     if (this.ws?.readyState === WebSocket.OPEN && message) {
                         this.ws.send(message);
-                        await delay(50);
+                        await delay(100);
                     }
                 }
             };
