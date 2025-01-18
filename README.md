@@ -29,7 +29,7 @@ import RTLayer from 'rtlayer-client';
 const oid = "lyvSfW7uPPolwax0BHMC"; // Replace with your Organization ID
 const sid = "scz8W6qP7flVprZE6vRD"; // Replace with your Service ID
 
-const rtlayer = new RTLayer(oid, sid);
+const rtlayer = RTLayer(oid, sid);
 
 export default rtlayer;
 ```
@@ -67,7 +67,7 @@ import RTLayer from 'rtlayer-client';
 // Initialize RTLayer
 const oid = "lyvSfW7uPPolwax0BHMC"; // Replace with your Organization ID
 const sid = "scz8WW6qP7flVprZE6vRD"; // Replace with your Service ID
-const rtlayer = new RTLayer(oid, sid);
+const rtlayer = RTLayer(oid, sid);
 
 // Listen for all events
 rtlayer.on("*", (message) => {
