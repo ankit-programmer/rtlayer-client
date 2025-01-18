@@ -32,21 +32,6 @@ class MessageStream extends Transform {
 }
 
 
-class MessageQueue extends EventEmitter {
-    private queue: string[] = [];
-    constructor() {
-        super();
-    }
-    push(message: string) {
-        this.queue.push(message);
-    }
-    pop() {
-        return this.queue.shift();
-    }
-    size() {
-        return this.queue.length;
-    }
-}
 
 class WebSocketClient {
     private ws: WebSocket | null = null;
@@ -75,7 +60,9 @@ class WebSocketClient {
                 this.activeChannels.forEach(channel => this.subscribe(channel));
                 // Send messages through the stream
                 this.messageStream.unpipe();
-                if (this.ws) this.messageStream.pipe(new SendMessage(this.ws));
+                if (this.ws) this.messageStream.pipe(new SendMessage(this.ws)).on('data', (chunk) => chunk).on('error', (error) => {
+                    console.error(error);
+                });
             };
             this.ws.onmessage = (event) => {
                 let data = event.data;
@@ -96,6 +83,7 @@ class WebSocketClient {
 
             };
             this.ws.onclose = () => {
+                this.messageStream.unpipe();
                 this.emit('close', null);
                 setTimeout(() => {
                     // Retry connection
@@ -113,11 +101,13 @@ class WebSocketClient {
 
     subscribe(channel: string) {
         this.activeChannels.add(channel);
-        this.messageStream.write({ action: 'join', channel: channel });
+        const message = { action: 'join', channel: channel };
+        this.messageStream.write(message);
     }
     unsubscribe(channel: string) {
         this.activeChannels.delete(channel);
-        this.messageStream.write({ action: 'leave', channel: channel });
+        const message = { action: 'leave', channel: channel };
+        this.messageStream.write(message);
     }
 
     close() {
@@ -168,12 +158,11 @@ class WebSocketClient {
         }
     }
 }
-
 const cache = new Map<string, WebSocketClient>();
-export default function RTLayerClient(org: string, service: string, token?: string, retryInterval: number = 5000) {
+export default function RTLayerClient(org: string, service: string, token?: string, retryInterval: number = 5000): WebSocketClient {
     const key = `${org}/${service}`;
     if (cache.has(key)) {
-        return cache.get(key);
+        return cache.get(key)!;
     }
     const client = new WebSocketClient(org, service, token, retryInterval);
     cache.set(key, client);
