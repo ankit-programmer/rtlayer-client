@@ -93,12 +93,12 @@ class WebSocketClient {
 
     subscribe(channel: string) {
         this.activeChannels.add(channel);
-        const message = { action: 'join', channel: channel };
+        const message = { action: 'join', id: channel };
         this.queue.push(JSON.stringify(message));
     }
     unsubscribe(channel: string) {
         this.activeChannels.delete(channel);
-        const message = { action: 'leave', channel: channel };
+        const message = { action: 'leave', id: channel };
         this.queue.push(JSON.stringify(message));
     }
 
