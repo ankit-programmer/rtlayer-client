@@ -1,6 +1,52 @@
+import { EventEmitter, Transform, Writable } from "stream";
 
 const BASE_URL = `wss://ws.rtlayer.com`;
-const connectionCache = new Map<string, WebSocket>();
+class SendMessage extends Transform {
+    private ws: WebSocket;
+    constructor(ws: WebSocket) {
+        super({ objectMode: true });
+        this.ws = ws;
+    }
+    async _transform(chunk: string, encoding: string, callback: Function) {
+        try {
+            this.ws?.send(chunk);
+            await delay(100);
+            this.push(chunk);
+        } catch (error) {
+            console.error(error);
+        }
+        callback();
+    }
+}
+
+class MessageStream extends Transform {
+
+    constructor() {
+        super({ objectMode: true });
+    }
+
+    _transform(chunk: Object, encoding: string, callback: Function) {
+        this.push(JSON.stringify(chunk));
+        callback();
+    }
+}
+
+
+class MessageQueue extends EventEmitter {
+    private queue: string[] = [];
+    constructor() {
+        super();
+    }
+    push(message: string) {
+        this.queue.push(message);
+    }
+    pop() {
+        return this.queue.shift();
+    }
+    size() {
+        return this.queue.length;
+    }
+}
 
 class WebSocketClient {
     private ws: WebSocket | null = null;
@@ -9,36 +55,27 @@ class WebSocketClient {
     private eventListeners: { [event: string]: ((data: any) => void)[] } = {};
     private token?: string
     private isGloballySubscribed = false; // True if listening for "*" events
-    private queue: { action: 'join' | 'leave', channel: string }[] = [];
     private activeChannels: Set<string> = new Set();
+    private messageStream;
 
     constructor(org: string, service: string, token?: string, retryInterval: number = 5000) {
         this.url = `${BASE_URL}/${org}/${service}/?token=${token}`;
         this.retryInterval = retryInterval;
         this.token = token
+        this.messageStream = new MessageStream();
         this.connect();
     }
 
     private connect() {
         if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
-            if (connectionCache.has(this.url)) {
-                this.ws = connectionCache.get(this.url)!;
-            } else {
-                this.ws = new WebSocket(this.url);
-                connectionCache.set(this.url, this.ws);
-            }
+            this.ws = new WebSocket(this.url);
             this.ws.onopen = async () => {
                 this.emit('open', null);
-                // Rejoin active channels
+                // Rejoin active channels on reconnect
                 this.activeChannels.forEach(channel => this.subscribe(channel));
-                // Send all queued messages
-                while (this.queue.length > 0) {
-                    const { action, channel } = this.queue.shift()!;
-                    this.ws?.send(JSON.stringify({
-                        "action": action,
-                        "id": channel
-                    }));
-                }
+                // Send messages through the stream
+                this.messageStream.unpipe();
+                if (this.ws) this.messageStream.pipe(new SendMessage(this.ws));
             };
             this.ws.onmessage = (event) => {
                 let data = event.data;
@@ -62,7 +99,6 @@ class WebSocketClient {
                 this.emit('close', null);
                 setTimeout(() => {
                     // Retry connection
-                    connectionCache.delete(this.url);
                     this.connect();
                 }, this.retryInterval);
             };
@@ -77,25 +113,11 @@ class WebSocketClient {
 
     subscribe(channel: string) {
         this.activeChannels.add(channel);
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-                "action": 'join',
-                "id": channel
-            }));
-        } else {
-            this.queue.push({ action: 'join', channel: channel });
-        }
+        this.messageStream.write({ action: 'join', channel: channel });
     }
     unsubscribe(channel: string) {
         this.activeChannels.delete(channel);
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-                "action": 'leave',
-                "id": channel
-            }));
-        } else {
-            this.queue.push({ action: 'leave', channel: channel });
-        }
+        this.messageStream.write({ action: 'leave', channel: channel });
     }
 
     close() {
@@ -147,7 +169,17 @@ class WebSocketClient {
     }
 }
 
-export default WebSocketClient;
+const cache = new Map<string, WebSocketClient>();
+export default function RTLayerClient(org: string, service: string, token?: string, retryInterval: number = 5000) {
+    const key = `${org}/${service}`;
+    if (cache.has(key)) {
+        return cache.get(key);
+    }
+    const client = new WebSocketClient(org, service, token, retryInterval);
+    cache.set(key, client);
+    return client;
+}
+
 
 function delay(ms: number = 1000) {
     return new Promise(resolve => setTimeout(resolve, ms));
